@@ -8,7 +8,7 @@ function Get-ADGroupMemberObjects {
 
     $GroupDN = Get-ADGroup $GroupName | Select-Object -ExpandProperty distinguishedName
 
-    return (Get-ADObject $GroupDN -Properties member).member | Get-ADObject -Properties ObjectClass, DisplayName, Department, Manager | Where-Object -Property ObjectClass -in $ObjectClasses | Select-Object DisplayName, Department, @{l = "Manager"; e = { (Get-ADObject $_.Manager -Properties DisplayName).DisplayName } }
+    return (Get-ADObject $GroupDN -Properties member).member | Get-ADObject -Properties ObjectClass, sAMAccountName, DisplayName, Department, Manager | Where-Object -Property ObjectClass -in $ObjectClasses | Select-Object sAMAccountName, DisplayName, Department, @{l = "Manager"; e = { (Get-ADObject $_.Manager -Properties DisplayName).DisplayName } }
 }
 
 function Export-ADGroupMemberObjects {
@@ -21,7 +21,7 @@ function Export-ADGroupMemberObjects {
         [string]$FileName
     )
     $ADGroupMemberObjects = Get-ADGroupMemberObjects -GroupName $GroupName -ObjectClasses $ObjectClasses
-    $ADGroupMemberObjects | Format-Table DisplayName, Department, Manager
+    $ADGroupMemberObjects | Format-Table sAMAccountName, DisplayName, Department, Manager
     $ADGroupMemberObjects | Export-csv $FileName -NoTypeInformation
 }
 
