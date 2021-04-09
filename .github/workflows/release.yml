@@ -1,0 +1,15 @@
+name: 'Publish to Powershell Gallery'
+
+on: 
+  release:
+    types: published
+jobs:
+  publish:    
+    name: ADGroupMemberObjects Deployment
+    runs-on: windows-2019
+    steps:
+    - uses: actions/checkout@v1
+    - name: Deploy to PSGallery
+      env:
+        PSGALLERY_TOKEN: ${{secrets.PowershellGallery}}        
+      run: powershell .github\workflows\Deploy.ps1
