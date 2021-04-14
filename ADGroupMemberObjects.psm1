@@ -2,41 +2,71 @@ function Get-ADGroupMemberObjects {
     [CmdletBinding(ConfirmImpact = 'Low')]
     param(
         [parameter(Mandatory = $true)][ValidateNotNullOrEmpty()]
-        [string]$GroupName,
-        [string[]]$ObjectClasses = ("user", "contact")
+        [string]$GroupNTAccount
     )
 
-    $GroupDN = Get-ADGroup $GroupName | Select-Object -ExpandProperty distinguishedName
+    $GroupDomain = $GroupNTAccount.Split("\") | Select-Object -First 1
+    $GroupName = $GroupNTAccount.Split("\") | Select-Object -Last 1
+    $GroupDomainController = (Get-ADDomainController -Discover -Domain $GroupDomain).HostName | Select-Object -First 1
+    $GroupDN = Get-ADGroup -Server $GroupDomainController $GroupName | Select-Object -ExpandProperty distinguishedName
+    $ADGroupMemberObjects = (Get-ADObject -Server $GroupDomainController $GroupDN -Properties member).member | Get-ADObject -Server $GroupDomainController -Properties ObjectClass, objectSid | Where-Object -Property ObjectClass -in ("user", "foreignSecurityPrincipal") 
+    $ADGroupMemberObjectsResult = @()
 
-    return (Get-ADObject $GroupDN -Properties member).member | Get-ADObject -Properties ObjectClass, sAMAccountName, DisplayName, Department, Manager | Where-Object -Property ObjectClass -in $ObjectClasses | Select-Object sAMAccountName, DisplayName, Department, @{l = "Manager"; e = { (Get-ADObject $_.Manager -Properties DisplayName).DisplayName } }
+    ForEach ($ADGroupMemberObject in $ADGroupMemberObjects) {
+        $NTAccount = (New-Object Security.Principal.SecurityIdentifier $ADGroupMemberObject.objectSid).translate( [Security.Principal.NTAccount] ).ToString()
+        $Domain = $NTAccount.Split("\") | Select-Object -First 1
+        $DomainController = (Get-ADDomainController -Discover -Domain $Domain).HostName | Select-Object -First 1
+        $ADObjectUser = Get-ADUser -Server $DomainController $ADGroupMemberObject.objectSid -Properties DisplayName, Department, Manager
+        $ADObjectManager = Get-ADUser -Server $DomainController $ADObjectUser.Manager -Properties DisplayName
+        $ADGroupMemberObjectsResult += New-Object -TypeName PSObject -Property @{
+            NTAccount   = $NTAccount
+            DisplayName = $ADObjectUser.DisplayName
+            Department  = $ADObjectUser.Department
+            Manager     = $ADObjectManager.DisplayName
+        }
+    }
+
+    return $ADGroupMemberObjectsResult | Select-object -Property NTAccount, DisplayName, Department, Manager
 }
 
 function Export-ADGroupMemberObjects {
     [CmdletBinding(ConfirmImpact = 'Low')]
     param(
         [parameter(Mandatory = $true)][ValidateNotNullOrEmpty()]
-        [string]$GroupName,
-        [string[]]$ObjectClasses = ("user", "contact"),
+        [string]$GroupNTAccount,
         [parameter(Mandatory = $true)][ValidateNotNullOrEmpty()]
         [string]$FileName
     )
-    $ADGroupMemberObjects = Get-ADGroupMemberObjects -GroupName $GroupName -ObjectClasses $ObjectClasses
-    $ADGroupMemberObjects | Format-Table sAMAccountName, DisplayName, Department, Manager
-    $ADGroupMemberObjects | Export-csv $FileName -NoTypeInformation
+    
+    $ADGroupMemberObjects = Get-ADGroupMemberObjects -GroupNTAccount $GroupNTAccount
+    $ADGroupMemberObjects | Export-Csv $FileName -NoTypeInformation -Encoding "UTF8"
+    $ADGroupMemberObjects
 }
 
-$GroupNameArgumentCompleter = {
+$GroupNTAccountArgumentCompleter = {
     param($commandName, $parameterName, $wordToComplete, $commandAst, $fakeBoundParameters)
-    $groups = Get-ADGroup -Filter "Name -like '$wordToComplete*'"
+    
+    $wordToComplete = $wordToComplete.Replace("'", "")
+    
+    if ($wordToComplete -Match "\\") {
+        $GroupDomain = $wordToComplete.Split("\").ToUpper() | Select-Object -First 1
+    }
+    else {
+        $GroupDomain = (Get-ADDomain).NetBIOSName
+    }
+    
+    $GroupName = $wordToComplete.Split("\") | Select-Object -Last 1
+    $GroupDomainController = (Get-ADDomainController -Discover -Domain $GroupDomain).HostName | Select-Object -First 1
+    $groups = Get-ADGroup -Server $GroupDomainController -Filter "Name -like '$GroupName*'"
     $groups | ForEach-Object {
-        New-Object -Type System.Management.Automation.CompletionResult -ArgumentList "'$($_.Name)'",
-            $_.Name,
-            "ParameterValue",
-            $_.Name
+        New-Object -Type System.Management.Automation.CompletionResult -ArgumentList "'$GroupDomain\$($_.Name)'",
+        $_.Name,
+        "ParameterValue",
+        $_.Name
     }
 }
 
-Register-ArgumentCompleter -CommandName Get-ADGroupMemberObjects -ParameterName GroupName -ScriptBlock $GroupNameArgumentCompleter
-Register-ArgumentCompleter -CommandName Export-ADGroupMemberObjects -ParameterName GroupName -ScriptBlock $GroupNameArgumentCompleter
+Register-ArgumentCompleter -CommandName Get-ADGroupMemberObjects -ParameterName GroupNTAccount -ScriptBlock $GroupNTAccountArgumentCompleter
+Register-ArgumentCompleter -CommandName Export-ADGroupMemberObjects -ParameterName GroupNTAccount -ScriptBlock $GroupNTAccountArgumentCompleter
 Export-ModuleMember -Function @('Get-ADGroupMemberObjects')
 Export-ModuleMember -Function @('Export-ADGroupMemberObjects')
