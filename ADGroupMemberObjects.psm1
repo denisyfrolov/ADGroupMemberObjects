@@ -7,22 +7,53 @@ function Get-ADGroupMemberObjects {
 
     $GroupDomain = $GroupNTAccount.Split("\") | Select-Object -First 1
     $GroupName = $GroupNTAccount.Split("\") | Select-Object -Last 1
-    $GroupDomainController = (Get-ADDomainController -Discover -Domain $GroupDomain).HostName | Select-Object -First 1
-    $GroupDN = Get-ADGroup -Server $GroupDomainController $GroupName | Select-Object -ExpandProperty distinguishedName
+    $GroupDomainController = (Get-ADDomainController -Discover -Domain $GroupDomain -ErrorAction SilentlyContinue).HostName | Select-Object -First 1
+
+    if (!$GroupDomainController) {
+        throw "Domain Controller Discovering Error in [$($GroupDomain)]."
+    }
+
+    try {
+        $GroupDN = Get-ADGroup -Server $GroupDomainController $GroupName -ErrorAction SilentlyContinue | Select-Object -ExpandProperty distinguishedName
+    }
+    catch {
+        throw "Group [$($GroupName)] is not found in [$($GroupDomain)]."
+    }
+    
     $ADGroupMemberObjects = (Get-ADObject -Server $GroupDomainController $GroupDN -Properties member).member | Get-ADObject -Server $GroupDomainController -Properties ObjectClass, objectSid | Where-Object -Property ObjectClass -in ("user", "foreignSecurityPrincipal") 
     $ADGroupMemberObjectsResult = @()
 
     ForEach ($ADGroupMemberObject in $ADGroupMemberObjects) {
-        $NTAccount = (New-Object Security.Principal.SecurityIdentifier $ADGroupMemberObject.objectSid).translate( [Security.Principal.NTAccount] ).ToString()
+        try {
+            $NTAccount = (New-Object Security.Principal.SecurityIdentifier $ADGroupMemberObject.objectSid).translate( [Security.Principal.NTAccount] ).ToString()
+        }
+        catch {
+            continue
+        }
         $Domain = $NTAccount.Split("\") | Select-Object -First 1
-        $DomainController = (Get-ADDomainController -Discover -Domain $Domain).HostName | Select-Object -First 1
-        $ADObjectUser = Get-ADUser -Server $DomainController $ADGroupMemberObject.objectSid -Properties DisplayName, Department, Manager
-        $ADObjectManager = Get-ADUser -Server $DomainController $ADObjectUser.Manager -Properties DisplayName
-        $ADGroupMemberObjectsResult += New-Object -TypeName PSObject -Property @{
-            NTAccount   = $NTAccount
-            DisplayName = $ADObjectUser.DisplayName
-            Department  = $ADObjectUser.Department
-            Manager     = $ADObjectManager.DisplayName
+        $DomainController = (Get-ADDomainController -Discover -Domain $Domain -ErrorAction SilentlyContinue).HostName | Select-Object -First 1
+        if ($DomainController) {
+            try {
+                $ADObjectUser = Get-ADUser -Server $DomainController $ADGroupMemberObject.objectSid -Properties DisplayName, Department, Manager
+            }
+            catch {
+                $ADObjectUser = $null
+            }
+
+            if ($ADObjectUser) {
+                try {
+                    $ADObjectManager = Get-ADUser -Server $DomainController $ADObjectUser.Manager -Properties DisplayName
+                }
+                catch {
+                    $ADObjectManager = $null
+                }
+                $ADGroupMemberObjectsResult += New-Object -TypeName PSObject -Property @{
+                    NTAccount   = $NTAccount
+                    DisplayName = $ADObjectUser.DisplayName
+                    Department  = $ADObjectUser.Department
+                    Manager     = $ADObjectManager.DisplayName
+                }
+            }
         }
     }
 
