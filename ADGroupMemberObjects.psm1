@@ -20,16 +20,33 @@ function Get-ADGroupMemberObjects {
         throw "Group [$($GroupName)] is not found in [$($GroupDomain)]."
     }
     
-    $ADGroupMemberObjects = (Get-ADObject -Server $GroupDomainController $GroupDN -Properties member).member | Get-ADObject -Server $GroupDomainController -Properties ObjectClass, objectSid | Where-Object -Property ObjectClass -in ("user", "foreignSecurityPrincipal") 
+    $ADGroupMemberObjects = (Get-ADObject -Server $GroupDomainController $GroupDN -Properties member).member  
     $ADGroupMemberObjectsResult = @()
 
     ForEach ($ADGroupMemberObject in $ADGroupMemberObjects) {
+
+        $ADGroupMemberObjectDomain = ($ADGroupMemberObject.Substring($ADGroupMemberObject.IndexOf("DC=")) -Split "," | ? { $_ -like "DC=*" }) -join "." -replace ("DC=", "")
+
+        try {
+            $ADGroupMemberObjectDomainController = (Get-ADDomainController -Discover -Domain $ADGroupMemberObjectDomain -ErrorAction SilentlyContinue).HostName | Select-Object -First 1
+            $ADGroupMemberObject = Get-ADObject -Server $ADGroupMemberObjectDomainController $ADGroupMemberObject -Properties ObjectClass, objectSid | Where-Object -Property ObjectClass -in ("user", "foreignSecurityPrincipal", "group")
+        }
+        catch {
+            continue
+        }
+
         try {
             $NTAccount = (New-Object Security.Principal.SecurityIdentifier $ADGroupMemberObject.objectSid).translate( [Security.Principal.NTAccount] ).ToString()
         }
         catch {
             continue
         }
+
+        if ($ADGroupMemberObject.ObjectClass -eq "group") {
+            $ADGroupMemberObjectsResult += Get-ADGroupMemberObjects -GroupNTAccount $NTAccount
+            continue
+        }
+
         $Domain = $NTAccount.Split("\") | Select-Object -First 1
         $DomainController = (Get-ADDomainController -Discover -Domain $Domain -ErrorAction SilentlyContinue).HostName | Select-Object -First 1
         if ($DomainController) {
@@ -57,7 +74,7 @@ function Get-ADGroupMemberObjects {
         }
     }
 
-    return $ADGroupMemberObjectsResult | Select-object -Property NTAccount, DisplayName, Department, Manager
+    return $ADGroupMemberObjectsResult | Select-object -Property NTAccount, DisplayName, Department, Manager -Unique
 }
 
 function Export-ADGroupMemberObjects {
